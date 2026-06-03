@@ -3,34 +3,71 @@
 Normalize images into an 800×800 PNG with a white background, ready for a
 circular crop overlay in a downstream application.
 
+Built for preparing badge artwork for the game
+[**Badge(r)s!**](https://www.badge-r-s.de).
+
 Two methods are supported:
 
 - **`crest`** — a single coat of arms, centered by weighted centroid.
 - **`map`**   — a regional map covering the viewport, with a smaller region
   coat of arms tucked into a corner of the visible circle.
 
+> ⚠️ **Disclaimer:** These scripts were entirely vibe-coded. They work for the
+> author's use case but have not been reviewed, hardened, or extensively
+> tested. Use at your own risk; verify output before relying on it.
+
 ## Setup
 
-```sh
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-```
-
-External binaries required on `PATH`:
+Requires Python 3.10+ and the following external binaries on `PATH`:
 
 - `pngquant` — lossy palette compression
 - `oxipng`   — lossless PNG optimization
 
 On Arch: `sudo pacman -S pngquant oxipng`.
+On Debian/Ubuntu: `sudo apt install pngquant`, and grab `oxipng` from
+[its releases](https://github.com/shssoichiro/oxipng/releases) or `cargo install oxipng`.
+
+Then, from the project directory, create a virtual environment and install
+the Python dependencies into it:
+
+```sh
+# 1. Create an isolated environment in ./.venv
+python3 -m venv .venv
+
+# 2. Install the Python dependencies into that environment
+.venv/bin/pip install -r requirements.txt
+```
+
+You do not need to "activate" the venv — the examples below call
+`.venv/bin/python` directly, which uses the environment automatically.
+If you prefer to activate it (so plain `python` works), run
+`source .venv/bin/activate`; type `deactivate` to leave it.
+
+## Input formats
+
+- **Vector:** `.svg` — rasterized via cairosvg (2400 px wide for `crest`,
+  800 px wide for `map`). Vector inputs are recommended for crests.
+- **Raster:** anything Pillow can open — `.png`, `.jpg` / `.jpeg`, `.gif`,
+  `.webp`, `.tiff`, `.bmp`. Raster inputs are never upscaled; if the source
+  is small, the warning `input is small (WxH); not upscaling` is logged and
+  the result will be smaller than the inscribed circle.
+- **Transparency:** when an alpha channel is present, it drives foreground
+  detection. Without alpha, `crest` falls back to a white-tolerant heuristic
+  plus corner flood-fill (catches off-white backgrounds and thin frames);
+  `map` keeps the full opaque rectangle.
 
 ## Usage
 
 ### crest
 
+Normalize a single coat of arms:
+
 ```sh
 .venv/bin/python badgerify.py crest INPUT OUTPUT \
     [--target-bytes 30000] [--max-bytes 100000] [--keep-intermediate]
 ```
+
+What it does:
 
 1. Rasterizes SVGs at 2400×2400 (vector inputs only — raster inputs are never
    upscaled).
@@ -44,13 +81,28 @@ On Arch: `sudo pacman -S pngquant oxipng`.
 5. Compresses adaptively (pngquant + oxipng) targeting a few kB; fails if
    the result exceeds `--max-bytes`.
 
-### map
+Example:
 
 ```sh
-.venv/bin/python badgerify.py map MAP COA OUTPUT \
-    [--angle 30] [--coa-size 0.12] \
+.venv/bin/python badgerify.py crest input/warszawa-coa.svg out/warszawa.png
+```
+
+This rasterizes the SVG, centers it by weighted centroid, and writes a
+compressed `warszawa.png` (≈30 kB). To inspect the pre-compression 800×800
+PNG side-by-side, pass `--keep-intermediate` — it writes `warszawa.pre.png`
+next to the output.
+
+### map
+
+Compose a regional map with a smaller coat of arms overlaid:
+
+```sh
+.venv/bin/python badgerify.py map IMAGE COA OUTPUT \
+    [--angle 30] [--coa-size 0.2] \
     [--target-bytes 30000] [--max-bytes 100000] [--keep-intermediate]
 ```
+
+What it does:
 
 1. Trims fully-transparent margins (if the map has an alpha channel).
    No white-based trimming, so the full rectangle of an opaque map is
@@ -64,3 +116,26 @@ On Arch: `sudo pacman -S pngquant oxipng`.
    90° = up, positive counter-clockwise**. The default 30° lands in the
    upper-right corner of the visible circle.
 5. Compresses the same way as `crest`.
+
+The typical use case is a **district / suburb map paired with the parent
+city's coat of arms** — the map shows where in the city the suburb sits,
+and the CoA in the corner identifies the city it belongs to.
+
+Example: a map of the Śródmieście district highlighted within Warsaw,
+plus Warsaw's coat of arms tucked into the corner:
+
+```sh
+.venv/bin/python badgerify.py map \
+    input/srodmiescie-in-warsaw.svg \
+    input/warsaw-coa.svg \
+    out/srodmiescie.png
+```
+
+The defaults place the city CoA in the upper-right of the visible circle
+(`--angle 30`, `--coa-size 0.2`). To move it top-left use `--angle 150`;
+bottom-right `--angle -30`. Raise `--coa-size` (e.g. `0.25`) for a more
+prominent CoA, lower it (e.g. `0.15`) to give the map more room.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE) for the full text.
