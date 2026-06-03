@@ -98,7 +98,7 @@ Compose a regional map with a smaller coat of arms overlaid:
 
 ```sh
 .venv/bin/python badgerify.py map IMAGE COA OUTPUT \
-    [--angle 30] [--coa-size 0.2] \
+    [--angle 30] [--coa-size 0.2] [--fit cover] \
     [--target-bytes 30000] [--max-bytes 100000] [--keep-intermediate]
 ```
 
@@ -107,8 +107,11 @@ What it does:
 1. Trims fully-transparent margins (if the map has an alpha channel).
    No white-based trimming, so the full rectangle of an opaque map is
    preserved.
-2. Scales the map to **cover** the full 800×800 viewport (shorter side
-   = 800; the longer side overflows and is center-cropped).
+2. Scales the map into the 800×800 viewport according to `--fit`:
+   `cover` (default) fills the viewport — shorter side = 800, the longer
+   side overflows and is center-cropped (edges of a non-square map are
+   lost); `contain` preserves the whole map — longer side = 800, the
+   shorter side is white-padded.
 3. Auto-crops and rescales the region coat of arms to roughly
    `--coa-size × 800` px.
 4. Places the region CoA inside the inscribed circle at angle `--angle`,
@@ -135,6 +138,11 @@ The defaults place the city CoA in the upper-right of the visible circle
 (`--angle 30`, `--coa-size 0.2`). To move it top-left use `--angle 150`;
 bottom-right `--angle -30`. Raise `--coa-size` (e.g. `0.25`) for a more
 prominent CoA, lower it (e.g. `0.15`) to give the map more room.
+
+Use `--fit contain` when the map's aspect ratio is far from square and
+`cover` would crop important detail near the edges; the whole map is then
+visible inside the inscribed circle, but its content sits smaller against
+the (proportionally larger-looking) region CoA overlay.
 
 ## License
 

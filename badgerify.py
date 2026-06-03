@@ -162,11 +162,14 @@ def map_foreground_mask(img: Image.Image) -> Image.Image:
     return Image.new("L", img.size, 255)
 
 
-def fit_map_to_canvas(img: Image.Image, mask: Image.Image) -> tuple[Image.Image, Image.Image]:
-    """Scale-to-cover: shorter side reaches CANVAS, longer side overflows
-    and gets center-cropped by the paste step."""
+def fit_map_to_canvas(img: Image.Image, mask: Image.Image,
+                      mode: str) -> tuple[Image.Image, Image.Image]:
+    """`cover`: shorter side reaches CANVAS, longer side overflows and gets
+    center-cropped by the paste step. `contain`: longer side reaches CANVAS,
+    shorter side gets white-padded by the paste step."""
     w, h = img.size
-    scale = CANVAS / min(w, h)
+    side = min(w, h) if mode == "cover" else max(w, h)
+    scale = CANVAS / side
     new_size = (max(1, round(w * scale)), max(1, round(h * scale)))
     return (
         img.resize(new_size, Image.LANCZOS),
@@ -380,7 +383,7 @@ def process_crest(input_path: Path, output_path: Path, target: int, hard_cap: in
 
 
 def process_map(map_path: Path, coa_path: Path, output_path: Path, angle: float,
-                coa_size: float, target: int, hard_cap: int,
+                coa_size: float, fit: str, target: int, hard_cap: int,
                 keep_intermediate: bool) -> None:
     log(f"map: {map_path}")
     map_img = load_as_rgba(map_path, render_size=CANVAS)
@@ -388,8 +391,8 @@ def process_map(map_path: Path, coa_path: Path, output_path: Path, angle: float,
     map_mask = map_foreground_mask(map_img)
     map_img, map_mask = autocrop(map_img, map_mask)
     log(f"map cropped: {map_img.size}")
-    map_img, map_mask = fit_map_to_canvas(map_img, map_mask)
-    log(f"map scaled: {map_img.size}")
+    map_img, map_mask = fit_map_to_canvas(map_img, map_mask, fit)
+    log(f"map scaled ({fit}): {map_img.size}")
     canvas = place_map_on_canvas(map_img, map_mask)
 
     # Collapse anti-aliased edge halos so pngquant doesn't burn palette slots
@@ -438,6 +441,11 @@ def main() -> int:
     map_p.add_argument("--coa-size", type=float, default=REGION_COA_SIZE_FRAC,
                        help=f"region CoA size as fraction of the 800px canvas "
                             f"(default: {REGION_COA_SIZE_FRAC})")
+    map_p.add_argument("--fit", choices=("cover", "contain"), default="cover",
+                       help="how the map fills the 800x800 canvas: 'cover' "
+                            "fills it and crops the overflowing axis (default); "
+                            "'contain' keeps the whole map and white-pads the "
+                            "short axis")
     _add_common_args(map_p)
 
     args = ap.parse_args()
@@ -453,8 +461,8 @@ def main() -> int:
                           args.max_bytes, args.keep_intermediate)
         else:
             process_map(args.image, args.coa, args.output, args.angle,
-                        args.coa_size, args.target_bytes, args.max_bytes,
-                        args.keep_intermediate)
+                        args.coa_size, args.fit, args.target_bytes,
+                        args.max_bytes, args.keep_intermediate)
     except RuntimeError as e:
         log(f"error: {e}")
         return 1
