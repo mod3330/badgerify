@@ -163,13 +163,16 @@ def map_foreground_mask(img: Image.Image) -> Image.Image:
 
 
 def fit_map_to_canvas(img: Image.Image, mask: Image.Image,
-                      mode: str) -> tuple[Image.Image, Image.Image]:
-    """`cover`: shorter side reaches CANVAS, longer side overflows and gets
-    center-cropped by the paste step. `contain`: longer side reaches CANVAS,
-    shorter side gets white-padded by the paste step."""
+                      mode: str, padding: float) -> tuple[Image.Image, Image.Image]:
+    """`cover`: shorter side reaches the target box, longer side overflows and
+    gets center-cropped by the paste step. `contain`: longer side reaches the
+    target box, shorter side gets white-padded by the paste step. `padding` is
+    the fraction of CANVAS reserved as a white margin on each side; the target
+    box is CANVAS * (1 - 2*padding)."""
+    target = CANVAS * (1.0 - 2.0 * padding)
     w, h = img.size
     side = min(w, h) if mode == "cover" else max(w, h)
-    scale = CANVAS / side
+    scale = target / side
     new_size = (max(1, round(w * scale)), max(1, round(h * scale)))
     return (
         img.resize(new_size, Image.LANCZOS),
@@ -383,16 +386,16 @@ def process_crest(input_path: Path, output_path: Path, target: int, hard_cap: in
 
 
 def process_map(map_path: Path, coa_path: Path, output_path: Path, angle: float,
-                coa_size: float, fit: str, target: int, hard_cap: int,
-                keep_intermediate: bool) -> None:
+                coa_size: float, fit: str, padding: float, target: int,
+                hard_cap: int, keep_intermediate: bool) -> None:
     log(f"map: {map_path}")
     map_img = load_as_rgba(map_path, render_size=CANVAS)
     log(f"map loaded: {map_img.size}")
     map_mask = map_foreground_mask(map_img)
     map_img, map_mask = autocrop(map_img, map_mask)
     log(f"map cropped: {map_img.size}")
-    map_img, map_mask = fit_map_to_canvas(map_img, map_mask, fit)
-    log(f"map scaled ({fit}): {map_img.size}")
+    map_img, map_mask = fit_map_to_canvas(map_img, map_mask, fit, padding)
+    log(f"map scaled ({fit}, padding={padding}): {map_img.size}")
     canvas = place_map_on_canvas(map_img, map_mask)
 
     # Collapse anti-aliased edge halos so pngquant doesn't burn palette slots
@@ -446,6 +449,13 @@ def main() -> int:
                             "fills it and crops the overflowing axis (default); "
                             "'contain' keeps the whole map and white-pads the "
                             "short axis")
+    map_p.add_argument("--padding", type=float, default=0.0,
+                       help="white margin around the map as a fraction of the "
+                            "800px canvas, applied on each side before --fit. "
+                            "Use it to pull map content inward so a downstream "
+                            "circular crop doesn't eat the corners (e.g. 0.15 "
+                            "is about the largest square that still fits in "
+                            "the inscribed circle). Default: 0.0")
     _add_common_args(map_p)
 
     args = ap.parse_args()
@@ -461,8 +471,9 @@ def main() -> int:
                           args.max_bytes, args.keep_intermediate)
         else:
             process_map(args.image, args.coa, args.output, args.angle,
-                        args.coa_size, args.fit, args.target_bytes,
-                        args.max_bytes, args.keep_intermediate)
+                        args.coa_size, args.fit, args.padding,
+                        args.target_bytes, args.max_bytes,
+                        args.keep_intermediate)
     except RuntimeError as e:
         log(f"error: {e}")
         return 1

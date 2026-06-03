@@ -92,7 +92,7 @@ Compose a regional map with a smaller coat of arms overlaid:
 
 ```sh
 .venv/bin/python badgerify.py map IMAGE COA OUTPUT \
-    [--angle 30] [--coa-size 0.2] [--fit cover] \
+    [--angle 30] [--coa-size 0.2] [--fit cover] [--padding 0] \
     [--target-bytes 30000] [--max-bytes 100000] [--keep-intermediate]
 ```
 
@@ -115,6 +115,18 @@ would crop important detail near the edges — the whole map is then visible
 inside the inscribed circle, but its content sits smaller against the
 (proportionally larger-looking) region CoA overlay.
 
+Use `--padding` to pull the map inward from the canvas edges with a white
+margin. The downstream consumer crops to the inscribed circle, so corners
+of the 800×800 canvas are not visible — anything near them gets cut. A
+padded map keeps more of its actual content safely inside that circle.
+Padding is a fraction of the canvas applied on each side: `0.05` leaves a
+40 px ring; `0.15` is roughly the largest square that still fits entirely
+in the inscribed circle, so a `--fit contain` square map padded that much
+shows all four corners after the circle crop. Padding stacks with `--fit`
+— the map is scaled into the padded box first, then `cover`/`contain`
+behave as usual within it. The region CoA stays tangent to the visible
+circle, so it can land in the white margin rather than over the map.
+
 The typical use case is a **district / suburb map paired with the parent
 city's coat of arms** — the map shows where in the city the suburb sits,
 and the CoA in the corner identifies which city it belongs to.
@@ -125,7 +137,8 @@ and the CoA in the corner identifies which city it belongs to.
   no white-based trimming, so an opaque map's full rectangle is preserved.
 - Scales the map into the 800×800 viewport per `--fit`: `cover` (default)
   fills the viewport and center-crops the overflow; `contain` preserves the
-  whole map and white-pads the shorter side.
+  whole map and white-pads the shorter side. `--padding` shrinks the
+  target box (canvas minus a uniform margin) before `--fit` is applied.
 - Auto-crops and rescales the region CoA, then places it inside the
   inscribed circle at angle `--angle`, tangent to the circle from the
   inside. Angle convention: **0° = right, 90° = up, positive
