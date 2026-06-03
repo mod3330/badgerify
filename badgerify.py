@@ -29,44 +29,31 @@ import cairosvg
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 # --- Shared (both methods) -------------------------------------------------
-# Final output side length in pixels (square).
 CANVAS = 800
-# Diameter of the visible badge circle. Matches CANVAS so the circle is
-# inscribed in the square.
-CIRCLE_DIAMETER = 800
-# Alpha value (0-255) above which a pixel counts as foreground when an alpha
-# channel is present.
+CIRCLE_DIAMETER = 800  # circle is inscribed in the square
 ALPHA_THRESHOLD = 16
 
 # --- Crest method only -----------------------------------------------------
-# Fraction of the circle's diameter to fill with the crest's bbox diagonal.
-# <1 leaves a small ring of padding inside the rim.
+# Fraction of the circle's diameter the crest's bbox diagonal fills.
+# <1 leaves a ring of padding inside the rim.
 DIAGONAL_FILL = 0.90
-# Width in pixels used when rasterizing an SVG crest. Oversampled so the
-# autocrop bbox has resolution to work with after scaling down to the canvas.
-# (Map mode overrides this with CANVAS to avoid a costly LANCZOS downscale.)
+# SVG rasterize width. Oversampled so the autocrop bbox has resolution after
+# downscaling; map mode overrides this to CANVAS to skip the LANCZOS step.
 SVG_RENDER_SIZE = 2400
-# In RGB-without-alpha images, a channel value below this counts as
-# "not white" and therefore potentially foreground. Crest-only: the map
-# foreground detector intentionally ignores white-based heuristics.
+# Per-channel value below which an RGB pixel counts as "not white".
 WHITE_TOLERANCE = 250
-# Minimum pixels of margin around the placed crest. Prevents centroid-based
-# placement from butting the artwork against the canvas edge.
 EDGE_CLAMP = 20
-# PIL's ImageDraw.floodfill measures distance from the seed as the *sum* of
-# per-channel absolute differences. 100 spans pure white through frame grays
-# (sum delta ~30 to ~100) without bleeding into the colored badge content
-# (single-channel deltas there are typically >150).
+# floodfill's `thresh` is the SUM of per-channel deltas from the seed. 100
+# covers white-through-frame-gray without bleeding into colored badge content.
 BG_FLOOD_THRESH = 100
-# A corner pixel must have all channels >= this value to be used as a
-# flood-fill seed (avoids seeding from a dark crest that touches the corner).
+# Corner pixel must be at least this bright in every channel to seed the
+# flood (else a dark crest touching the corner would seed the fill).
 BG_SEED_MIN_CHANNEL = 150
 
 # --- Map method only -------------------------------------------------------
-# Default size of the small overlay CoA in map mode, as a fraction of CANVAS.
 REGION_COA_SIZE_FRAC = 0.2
-# Pixels subtracted from the inscribed-circle radius when placing the overlay
-# CoA. Higher = CoA sits closer to the map's center.
+# Subtracted from the radius when placing the overlay CoA — higher = closer
+# to the map's center.
 REGION_COA_MARGIN = 10
 
 
@@ -75,18 +62,10 @@ def log(msg: str) -> None:
 
 
 def load_as_rgba(path: Path, render_size: int = SVG_RENDER_SIZE) -> Image.Image:
-    """Load an image as RGBA. For SVGs, rasterize at `render_size` pixels
-    wide and let cairosvg derive the height from the SVG's natural aspect.
-
-    Why width-only: passing both output_width AND output_height to cairosvg
-    forces the SVG into that exact box, which (a) stretches non-square
-    artwork to fit and (b) introduces transparent letterboxing that, mixed
-    with stray feature pixels at the canvas edges, defeats alpha-based
-    autocrop. The crest pipeline wants a high render so its content bbox
-    has resolution to work with; the map pipeline overrides this to
-    rasterize closer to the final canvas size, avoiding a large LANCZOS
-    downscale that smears anti-aliased edges into many near-duplicate
-    colors (which pngquant then has to spend palette slots on)."""
+    """Load as RGBA; SVGs are rasterized at `render_size` wide, height
+    derived from the natural aspect. Passing both width AND height to
+    cairosvg would stretch non-square art and add transparent letterboxing
+    that breaks alpha-based autocrop."""
     suffix = path.suffix.lower()
     if suffix == ".svg":
         png_bytes = cairosvg.svg2png(url=str(path), output_width=render_size)
@@ -97,10 +76,9 @@ def load_as_rgba(path: Path, render_size: int = SVG_RENDER_SIZE) -> Image.Image:
 
 
 def _corner_flood_background(img: Image.Image) -> Image.Image:
-    """Return 'L' mask where 255 = background reachable from any corner by
-    color-tolerant flood-fill. Catches uniform frames and off-white backgrounds
-    that a per-pixel threshold misses (e.g. a 1px gray border drawn into a
-    rasterized GIF)."""
+    """'L' mask: 255 = background reachable from any corner by color-tolerant
+    flood-fill. Catches uniform frames and off-white borders (e.g. a 1px gray
+    border baked into a rasterized GIF) that a per-pixel threshold misses."""
     from PIL import ImageChops
     rgb = img.convert("RGB").copy()
     w, h = rgb.size
@@ -123,7 +101,9 @@ def _corner_flood_background(img: Image.Image) -> Image.Image:
 
 
 def foreground_mask(img: Image.Image) -> Image.Image:
-    """Return an 'L' image where 255 = foreground, 0 = background."""
+    """'L' mask: 255 = foreground. Trust alpha if any pixel is transparent;
+    else mark any non-white RGB pixel as foreground and subtract whatever a
+    corner flood-fill reaches (drops solid frames and off-white borders)."""
     from PIL import ImageChops
     alpha = img.getchannel("A")
     if alpha.getextrema()[0] < 255:
@@ -145,6 +125,9 @@ def autocrop(img: Image.Image, mask: Image.Image) -> tuple[Image.Image, Image.Im
 
 def _scale_to_diag(img: Image.Image, mask: Image.Image, target_diag: float,
                    allow_upscale: bool) -> tuple[Image.Image, Image.Image]:
+    """Resize so the bbox diagonal equals target_diag. Diagonal (not w/h) is
+    the chord that has to clear the inscribed circle, so this fits any
+    aspect ratio exactly."""
     w, h = img.size
     diag = (w * w + h * h) ** 0.5
     scale = target_diag / diag
@@ -160,6 +143,8 @@ def _scale_to_diag(img: Image.Image, mask: Image.Image, target_diag: float,
 
 
 def fit_to_circle(img: Image.Image, mask: Image.Image) -> tuple[Image.Image, Image.Image]:
+    """Scale the crest's diagonal to DIAGONAL_FILL of the circle. Never
+    upscales — small inputs stay small with a warning."""
     w, h = img.size
     target = CIRCLE_DIAMETER * DIAGONAL_FILL
     if (w * w + h * h) ** 0.5 <= target and max(w, h) < CANVAS // 2:
@@ -168,11 +153,9 @@ def fit_to_circle(img: Image.Image, mask: Image.Image) -> tuple[Image.Image, Ima
 
 
 def map_foreground_mask(img: Image.Image) -> Image.Image:
-    """Foreground mask for maps. Trusts alpha when present; otherwise treats
-    every pixel as foreground. No white-based detection at all — light or
-    near-white map content (snow, coastline labels, low-density regions) is
-    kept verbatim, and rectangular maps are not trimmed by stray light
-    pixels at the edges."""
+    """Map variant: trust alpha if present, otherwise everything is
+    foreground. No white-based detection — keeps snow, labels, and
+    low-density regions intact instead of treating them as background."""
     alpha = img.getchannel("A")
     if alpha.getextrema()[0] < 255:
         return alpha.point(lambda v: 255 if v > ALPHA_THRESHOLD else 0)
@@ -180,9 +163,8 @@ def map_foreground_mask(img: Image.Image) -> Image.Image:
 
 
 def fit_map_to_canvas(img: Image.Image, mask: Image.Image) -> tuple[Image.Image, Image.Image]:
-    """Scale the map (preserving aspect ratio) so it covers the full 800x800
-    viewport. The shorter side reaches CANVAS; the longer side overflows and
-    is center-cropped by the paste step."""
+    """Scale-to-cover: shorter side reaches CANVAS, longer side overflows
+    and gets center-cropped by the paste step."""
     w, h = img.size
     scale = CANVAS / min(w, h)
     new_size = (max(1, round(w * scale)), max(1, round(h * scale)))
@@ -217,6 +199,9 @@ def _paste_with_mask(canvas: Image.Image, art: Image.Image, mask: Image.Image,
 
 
 def place_on_canvas(art: Image.Image, mask: Image.Image) -> Image.Image:
+    """Composite on white with the foreground *centroid* (not bbox center)
+    at the canvas center. Visually centers asymmetric crests better than
+    bbox-centering; EDGE_CLAMP prevents extreme offsets from hugging the rim."""
     cx, cy = weighted_centroid(mask)
     w, h = art.size
     paste_x = round(CANVAS / 2 - cx)
@@ -230,8 +215,8 @@ def place_on_canvas(art: Image.Image, mask: Image.Image) -> Image.Image:
 
 
 def place_map_on_canvas(img: Image.Image, mask: Image.Image) -> Image.Image:
-    """Paste the (already canvas-covering) map centered, cropping any overflow
-    on the longer axis. PIL.paste handles negative offsets by clipping."""
+    """Center-paste the canvas-covering map; PIL clips negative offsets,
+    which is what crops the overflowing axis."""
     w, h = img.size
     paste_x = (CANVAS - w) // 2
     paste_y = (CANVAS - h) // 2
@@ -243,13 +228,8 @@ def place_map_on_canvas(img: Image.Image, mask: Image.Image) -> Image.Image:
 
 def overlay_region_coa(canvas: Image.Image, coa: Image.Image, mask: Image.Image,
                        angle_deg: float, size_frac: float) -> None:
-    """Place the small region coat of arms inside the visible circle.
-
-    Angle convention: 0° = right (east), 90° = up (north), positive
-    counter-clockwise. The CoA's bounding box is placed tangent to the
-    inscribed circle from the inside at the chosen angle, keeping it away
-    from the center of the map.
-    """
+    """Place the region CoA tangent to the inscribed circle from the inside,
+    at `angle_deg` (0=east, 90=north, CCW positive)."""
     coa_box = round(CIRCLE_DIAMETER * size_frac)
     w, h = coa.size
     scale = coa_box / max(w, h)
@@ -296,13 +276,10 @@ SCHEDULE: list[CompressStep] = [
     CompressStep("20-50",  16, 2),
 ]
 
-# Map schedule drops the posterize fallback entirely: posterize is hue-blind
-# and snaps subtle tints (e.g. beige #F2EFE9 -> neutral gray (224,224,224))
-# into neighboring buckets. The map pipeline applies a 3x3 median filter
-# pre-pass instead, which collapses anti-aliased edge halos without touching
-# pixels inside flat-fill regions — so pngquant gets a small natural palette
-# to begin with and the existing color-count ladder is enough. One extra
-# aggressive pngquant step is appended for hard-to-compress inputs.
+# No posterize: it's hue-blind and snaps subtle tints (beige -> gray) into
+# wrong buckets. The map pipeline uses a 3x3 median filter pre-pass instead
+# to collapse edge halos, leaving pngquant a small natural palette. One
+# extra-aggressive pngquant step is tacked on for hard-to-compress inputs.
 MAP_SCHEDULE: list[CompressStep] = [
     s for s in SCHEDULE if s.posterize is None
 ] + [CompressStep("0-50", 16, None)]
@@ -310,7 +287,12 @@ MAP_SCHEDULE: list[CompressStep] = [
 
 def compress(img: Image.Image, workdir: Path, target: int, hard_cap: int,
              schedule: list[CompressStep] = SCHEDULE) -> tuple[Path, int]:
-    """Run the adaptive compression schedule. Return (best_path, size)."""
+    """Run the schedule, return (best_path, size). Stops at the first step
+    that hits `target`; raises if even the smallest result exceeds `hard_cap`.
+
+    The white-mask/white-img are for posterize steps only: posterize bit-shifts
+    every channel, so 255 collapses to e.g. 192 — we mask the original white
+    pixels back on top so the background stays #FFFFFF (one cheap palette entry)."""
     best_path: Path | None = None
     best_size: int | None = None
 
@@ -330,8 +312,6 @@ def compress(img: Image.Image, workdir: Path, target: int, hard_cap: int,
         work = img
         if step.posterize is not None:
             work = ImageOps.posterize(rgb_src, step.posterize)
-            # Posterize collapses 255 -> (255 >> bits) << bits, turning the
-            # white canvas gray. Force the originally-white pixels back.
             work = Image.composite(white_img, work, white_mask)
         src = workdir / f"step{i}_src.png"
         work.save(src, format="PNG", optimize=False)
@@ -412,10 +392,9 @@ def process_map(map_path: Path, coa_path: Path, output_path: Path, angle: float,
     log(f"map scaled: {map_img.size}")
     canvas = place_map_on_canvas(map_img, map_mask)
 
-    # Collapse anti-aliased edge halos (1-2px gradients along district borders,
-    # coastlines, etc.) that otherwise force pngquant to spend palette slots
-    # on near-duplicates. Run before the region CoA overlay so the CoA's
-    # crisp graphical edges aren't softened.
+    # Collapse anti-aliased edge halos so pngquant doesn't burn palette slots
+    # on near-duplicates. Must run before the CoA overlay (which has crisp
+    # edges we don't want softened).
     canvas = canvas.filter(ImageFilter.MedianFilter(size=3))
 
     log(f"region coa: {coa_path}")
