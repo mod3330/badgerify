@@ -45,12 +45,11 @@ If you prefer to activate it (so plain `python` works), run
 
 ## Input formats
 
-- **Vector:** `.svg` — rasterized via cairosvg (2400 px wide for `crest`,
-  800 px wide for `map`). Vector inputs are recommended for crests.
+- **Vector:** `.svg` — rasterized via cairosvg. Recommended for crests.
 - **Raster:** anything Pillow can open — `.png`, `.jpg` / `.jpeg`, `.gif`,
   `.webp`, `.tiff`, `.bmp`. Raster inputs are never upscaled; if the source
-  is small, the warning `input is small (WxH); not upscaling` is logged and
-  the result will be smaller than the inscribed circle.
+  is smaller than the inscribed circle, the result will be too (a warning
+  is printed).
 - **Transparency:** when an alpha channel is present, it drives foreground
   detection. Without alpha, `crest` falls back to a white-tolerant heuristic
   plus corner flood-fill (catches off-white backgrounds and thin frames);
@@ -67,30 +66,25 @@ Normalize a single coat of arms:
     [--target-bytes 30000] [--max-bytes 100000] [--keep-intermediate]
 ```
 
-What it does:
-
-1. Rasterizes SVGs at 2400×2400 (vector inputs only — raster inputs are never
-   upscaled).
-2. Auto-crops to the foreground bounding box.
-3. Scales down so the bbox diagonal fits inside the 800-pixel inscribed
-   circle, with 10% padding.
-4. Places the art on a white canvas so its **weighted centroid** lands at
-   (400, 400). Because typical coats of arms are top-heavy, this shifts the
-   art downward — useful when the consumer overlays a circle that hides the
-   corners.
-5. Compresses adaptively (pngquant + oxipng) targeting a few kB; fails if
-   the result exceeds `--max-bytes`.
-
 Example:
 
 ```sh
 .venv/bin/python badgerify.py crest input/warszawa-coa.svg out/warszawa.png
 ```
 
-This rasterizes the SVG, centers it by weighted centroid, and writes a
-compressed `warszawa.png` (≈30 kB). To inspect the pre-compression 800×800
-PNG side-by-side, pass `--keep-intermediate` — it writes `warszawa.pre.png`
-next to the output.
+Writes a compressed `warszawa.png` (≈30 kB). Pass `--keep-intermediate` to
+also save the pre-compression 800×800 PNG (e.g. `warszawa.pre.png`) for
+side-by-side inspection.
+
+**How it works:**
+
+- Auto-crops to the foreground, then scales the art so its diagonal fits
+  inside the 800-pixel inscribed circle with 10% padding.
+- Centers by **weighted centroid**, not bounding-box center. Typical coats
+  of arms are top-heavy, so this shifts the art downward — useful because
+  the downstream consumer overlays a circle that hides the corners.
+- Compresses with pngquant + oxipng aiming for a few kB; fails if the
+  result exceeds `--max-bytes`.
 
 ### map
 
@@ -101,28 +95,6 @@ Compose a regional map with a smaller coat of arms overlaid:
     [--angle 30] [--coa-size 0.2] [--fit cover] \
     [--target-bytes 30000] [--max-bytes 100000] [--keep-intermediate]
 ```
-
-What it does:
-
-1. Trims fully-transparent margins (if the map has an alpha channel).
-   No white-based trimming, so the full rectangle of an opaque map is
-   preserved.
-2. Scales the map into the 800×800 viewport according to `--fit`:
-   `cover` (default) fills the viewport — shorter side = 800, the longer
-   side overflows and is center-cropped (edges of a non-square map are
-   lost); `contain` preserves the whole map — longer side = 800, the
-   shorter side is white-padded.
-3. Auto-crops and rescales the region coat of arms to roughly
-   `--coa-size × 800` px.
-4. Places the region CoA inside the inscribed circle at angle `--angle`,
-   tangent to the circle from the inside. Angle convention: **0° = right,
-   90° = up, positive counter-clockwise**. The default 30° lands in the
-   upper-right corner of the visible circle.
-5. Compresses the same way as `crest`.
-
-The typical use case is a **district / suburb map paired with the parent
-city's coat of arms** — the map shows where in the city the suburb sits,
-and the CoA in the corner identifies the city it belongs to.
 
 Example: a map of the Śródmieście district highlighted within Warsaw,
 plus Warsaw's coat of arms tucked into the corner:
@@ -137,12 +109,28 @@ plus Warsaw's coat of arms tucked into the corner:
 The defaults place the city CoA in the upper-right of the visible circle
 (`--angle 30`, `--coa-size 0.2`). To move it top-left use `--angle 150`;
 bottom-right `--angle -30`. Raise `--coa-size` (e.g. `0.25`) for a more
-prominent CoA, lower it (e.g. `0.15`) to give the map more room.
+prominent CoA, lower it (e.g. `0.15`) to give the map more room. Use
+`--fit contain` when the map's aspect ratio is far from square and `cover`
+would crop important detail near the edges — the whole map is then visible
+inside the inscribed circle, but its content sits smaller against the
+(proportionally larger-looking) region CoA overlay.
 
-Use `--fit contain` when the map's aspect ratio is far from square and
-`cover` would crop important detail near the edges; the whole map is then
-visible inside the inscribed circle, but its content sits smaller against
-the (proportionally larger-looking) region CoA overlay.
+The typical use case is a **district / suburb map paired with the parent
+city's coat of arms** — the map shows where in the city the suburb sits,
+and the CoA in the corner identifies which city it belongs to.
+
+**How it works:**
+
+- Trims fully-transparent margins on the map if alpha is present. There is
+  no white-based trimming, so an opaque map's full rectangle is preserved.
+- Scales the map into the 800×800 viewport per `--fit`: `cover` (default)
+  fills the viewport and center-crops the overflow; `contain` preserves the
+  whole map and white-pads the shorter side.
+- Auto-crops and rescales the region CoA, then places it inside the
+  inscribed circle at angle `--angle`, tangent to the circle from the
+  inside. Angle convention: **0° = right, 90° = up, positive
+  counter-clockwise**. The default 30° lands in the upper-right.
+- Compresses the same way as `crest`.
 
 ## License
 
