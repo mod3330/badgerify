@@ -75,6 +75,17 @@ def load_as_rgba(path: Path, render_size: int = SVG_RENDER_SIZE) -> Image.Image:
     return img.convert("RGBA")
 
 
+def flatten_to_white(img: Image.Image) -> Image.Image:
+    """Composite RGBA onto white and drop the alpha channel. Inputs with a
+    transparent background often carry semi-transparent halo/noise pixels;
+    blended onto white they become near-white and the RGB white-detection
+    path (with corner flood-fill) removes them, whereas trusting the raw
+    alpha keeps them and they surface as gray speckles after quantization."""
+    flat = Image.new("RGBA", img.size, "white")
+    flat.alpha_composite(img)
+    return flat
+
+
 def _corner_flood_background(img: Image.Image) -> Image.Image:
     """'L' mask: 255 = background reachable from any corner by color-tolerant
     flood-fill. Catches uniform frames and off-white borders (e.g. a 1px gray
@@ -371,7 +382,7 @@ def save_compressed(canvas: Image.Image, output_path: Path, target: int,
 def process_crest(input_path: Path, output_path: Path, target: int, hard_cap: int,
                   keep_intermediate: bool) -> None:
     log(f"input: {input_path}")
-    img = load_as_rgba(input_path)
+    img = flatten_to_white(load_as_rgba(input_path))
     log(f"loaded: {img.size}")
 
     mask = foreground_mask(img)
@@ -404,7 +415,7 @@ def process_map(map_path: Path, coa_path: Path, output_path: Path, angle: float,
     canvas = canvas.filter(ImageFilter.MedianFilter(size=3))
 
     log(f"region coa: {coa_path}")
-    coa = load_as_rgba(coa_path)
+    coa = flatten_to_white(load_as_rgba(coa_path))
     log(f"coa loaded: {coa.size}")
     coa_mask = foreground_mask(coa)
     coa, coa_mask = autocrop(coa, coa_mask)

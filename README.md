@@ -50,10 +50,12 @@ If you prefer to activate it (so plain `python` works), run
   `.webp`, `.tiff`, `.bmp`. Raster inputs are never upscaled; if the source
   is smaller than the inscribed circle, the result will be too (a warning
   is printed).
-- **Transparency:** when an alpha channel is present, it drives foreground
-  detection. Without alpha, `crest` falls back to a white-tolerant heuristic
-  plus corner flood-fill (catches off-white backgrounds and thin frames);
-  `map` keeps the full opaque rectangle.
+- **Transparency:** crest inputs (and the region CoA in `map` mode) are
+  flattened onto white first, then foreground is found with a white-tolerant
+  heuristic plus corner flood-fill (catches off-white backgrounds, thin
+  frames, and semi-transparent halo noise). The map background itself keeps
+  its alpha: transparent margins are trimmed, opaque maps keep the full
+  rectangle.
 
 ## Usage
 
