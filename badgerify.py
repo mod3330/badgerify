@@ -334,7 +334,9 @@ def compress(img: Image.Image, workdir: Path, target: int, hard_cap: int,
         work.save(src, format="PNG", optimize=False)
 
         quant = workdir / f"step{i}_q.png"
-        _run([
+        # pngquant exits 99 when it can't hit the min quality of the range; it
+        # writes no output, so skip the step rather than treating it as fatal.
+        rc = subprocess.run([
             "pngquant",
             "--force",
             "--quality", step.quality,
@@ -343,7 +345,13 @@ def compress(img: Image.Image, workdir: Path, target: int, hard_cap: int,
             str(step.colors),
             "--output", str(quant),
             str(src),
-        ])
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+        if rc == 99:
+            log(f"step {chr(ord('A') + i)}: q={step.quality} c={step.colors} "
+                f"-> skipped (quality unreachable)")
+            continue
+        if rc != 0:
+            raise subprocess.CalledProcessError(rc, "pngquant")
         _run(["oxipng", "-o", "4", "--strip", "safe", "--quiet", str(quant)])
 
         size = quant.stat().st_size
