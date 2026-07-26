@@ -291,79 +291,98 @@ def _run(cmd: list[str]) -> None:
 class CompressStep:
     quality: str    # pngquant --quality min-max
     colors: int     # pngquant color count
-    denoise: bool   # 3x3 median pre-pass + no dithering
 
 
-# No posterize: it's hue-blind and snaps whole colors into wrong buckets
-# (yellow -> olive, beige -> gray). The last-resort step instead denoises with
-# a 3x3 median filter, which collapses scan noise and anti-aliased edge halos
-# so pngquant doesn't burn palette slots and bytes on near-duplicates. Dither
-# is disabled there too — it would just re-introduce the noise we removed.
-#
-# Smooth gradients are the one thing this step handles badly: it contours them
-# into visible arcs, and neither dithering nor a bigger palette fixes that
-# (more levels just means more, finer contours). They're dealt with upstream
-# instead — see strip_gradient_fills().
+# How far over --target-bytes a palette-only result may land before the denoise
+# rescue is worth its loss of detail. Clean line art overshoots by a few percent
+# and should be left alone; noisy scans overshoot by multiples, and there the
+# median filter buys back more bytes than it costs in quality.
+DENOISE_OVERSHOOT = 1.5
+
 SCHEDULE: list[CompressStep] = [
-    CompressStep("65-90", 256, False),
-    CompressStep("50-80", 128, False),
-    CompressStep("40-70",  64, False),
-    CompressStep("30-60",  32, False),
-    CompressStep("0-50",   16, True),
+    CompressStep("65-90", 256),
+    CompressStep("50-80", 128),
+    CompressStep("40-70",  64),
+    CompressStep("30-60",  32),
+    CompressStep("0-50",   16),
 ]
+
+
+def _quantize(img: Image.Image, workdir: Path, tag: str, step: CompressStep,
+              denoise: bool) -> tuple[Path, int] | None:
+    """One pngquant + oxipng pass. Returns (path, size), or None when pngquant
+    can't reach the quality floor — it exits 99 and writes nothing, which is a
+    step to skip rather than a fatal error."""
+    work = img.filter(ImageFilter.MedianFilter(3)) if denoise else img
+    src = workdir / f"{tag}_src.png"
+    work.save(src, format="PNG", optimize=False)
+
+    quant = workdir / f"{tag}_q.png"
+    rc = subprocess.run([
+        "pngquant",
+        "--force",
+        *(["--nofs"] if denoise else []),
+        "--quality", step.quality,
+        "--speed", "1",
+        "--strip",
+        str(step.colors),
+        "--output", str(quant),
+        str(src),
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+    if rc == 99:
+        return None
+    if rc != 0:
+        raise subprocess.CalledProcessError(rc, "pngquant")
+    _run(["oxipng", "-o", "4", "--strip", "safe", "--quiet", str(quant)])
+    return quant, quant.stat().st_size
 
 
 def compress(img: Image.Image, workdir: Path, target: int,
              hard_cap: int) -> tuple[Path, int]:
-    """Run the schedule, return (best_path, size). Stops at the first step
-    that hits `target`; raises if even the smallest result exceeds `hard_cap`."""
-    best_path: Path | None = None
-    best_size: int | None = None
+    """Shrink the palette until the result fits `target`, returning (path,
+    size). If nothing fits, a near miss is accepted as-is: `target` is an aim,
+    and overshooting it slightly beats mangling the art to meet it. Only a
+    result that misses by DENOISE_OVERSHOOT, or blows `hard_cap` outright, is
+    worth the denoise rescue."""
+    best: tuple[Path, int] | None = None
 
     for i, step in enumerate(SCHEDULE):
-        work = img.filter(ImageFilter.MedianFilter(3)) if step.denoise else img
-        src = workdir / f"step{i}_src.png"
-        work.save(src, format="PNG", optimize=False)
-
-        quant = workdir / f"step{i}_q.png"
-        # pngquant exits 99 when it can't hit the min quality of the range; it
-        # writes no output, so skip the step rather than treating it as fatal.
-        rc = subprocess.run([
-            "pngquant",
-            "--force",
-            *(["--nofs"] if step.denoise else []),
-            "--quality", step.quality,
-            "--speed", "1",
-            "--strip",
-            str(step.colors),
-            "--output", str(quant),
-            str(src),
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
-        if rc == 99:
-            log(f"step {chr(ord('A') + i)}: q={step.quality} c={step.colors} "
+        tag = chr(ord("A") + i)
+        got = _quantize(img, workdir, tag, step, denoise=False)
+        if got is None:
+            log(f"step {tag}: q={step.quality} c={step.colors} "
                 f"-> skipped (quality unreachable)")
             continue
-        if rc != 0:
-            raise subprocess.CalledProcessError(rc, "pngquant")
-        _run(["oxipng", "-o", "4", "--strip", "safe", "--quiet", str(quant)])
-
-        size = quant.stat().st_size
-        log(f"step {chr(ord('A') + i)}: q={step.quality} c={step.colors} "
-            f"denoise={step.denoise} -> {size} B")
-
-        if best_size is None or size < best_size:
-            best_size = size
-            best_path = quant
+        quant, size = got
+        log(f"step {tag}: q={step.quality} c={step.colors} -> {size} B")
 
         if size <= target:
             return quant, size
+        if best is None or size < best[1]:
+            best = (quant, size)
 
-    assert best_path is not None and best_size is not None
-    if best_size > hard_cap:
-        raise RuntimeError(
-            f"could not compress under {hard_cap} B (best={best_size} B)"
-        )
-    return best_path, best_size
+    if best is not None and best[1] <= min(hard_cap, target * DENOISE_OVERSHOOT):
+        log(f"target {target} B unreachable; keeping {best[1]} B rather than denoising")
+        return best
+
+    # Rescue. A 3x3 median collapses scan noise and anti-aliased edge halos so
+    # pngquant stops burning palette slots on near-duplicates; dithering is off
+    # because it would re-introduce what the median removed. It costs real
+    # detail, hence last resort. (Not posterize: that's hue-blind and snaps
+    # colors into the wrong bucket — yellow to olive, beige to gray.)
+    got = _quantize(img, workdir, "rescue", SCHEDULE[-1], denoise=True)
+    if got is not None:
+        quant, size = got
+        log(f"rescue: denoised, c={SCHEDULE[-1].colors} -> {size} B")
+        if best is None or size < best[1]:
+            best = (quant, size)
+
+    if best is not None and best[1] <= hard_cap:
+        return best
+    raise RuntimeError(
+        f"could not compress under {hard_cap} B "
+        f"(best={best[1] if best else 'n/a'} B)"
+    )
 
 
 def save_compressed(canvas: Image.Image, output_path: Path, target: int,

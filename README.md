@@ -86,12 +86,19 @@ side-by-side inspection.
   foreground detection treats white as background, so a shield with a white
   charge or quarter counted as lighter on that side and drifted off-centre —
   placement followed the tinctures instead of the shape.
-- Compresses with pngquant + oxipng aiming for a few kB; fails if the
-  result exceeds `--max-bytes`. Successively smaller palettes are tried until
-  one fits under `--target-bytes`. Noisy inputs (scans, JPEG-sourced art) are
-  the hard case: the noise burns palette entries, so the last-resort step
-  denoises with a 3×3 median filter first. That slightly softens fine detail,
-  but keeps hues intact — the alternative, posterizing, turned yellow olive.
+- Compresses with pngquant + oxipng, trying successively smaller palettes
+  (256 down to 16 colours) until one fits under `--target-bytes`.
+- **`--target-bytes` is an aim, `--max-bytes` is the limit.** Detailed arms
+  sometimes can't reach the target on palette size alone. A near miss is kept
+  as-is rather than degraded further — a busy crest at 33 kB looks far better
+  than the same crest beaten down to 27 kB. Only a result that misses by more
+  than 50%, or exceeds `--max-bytes`, triggers the last resort below; if even
+  that doesn't fit `--max-bytes`, the run fails.
+- **Last resort for noisy inputs** (scans, JPEG-sourced art): the noise burns
+  palette entries, so a 3×3 median filter is applied before quantizing. It
+  softens fine detail but keeps hues intact — the alternative, posterizing,
+  turned yellow olive. It used to run on any input that missed the target,
+  which is why clean, detailed art came out mushy.
 - **Gradient fills are dropped from SVG inputs.** Coat-of-arms SVGs habitually
   paint a translucent radial "shine" over the whole shield. Heraldry is flat
   colour and the badge ends up small, so it adds nothing you can see — but a
