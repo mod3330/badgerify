@@ -91,6 +91,14 @@ side-by-side inspection.
   the hard case: the noise burns palette entries, so the last-resort step
   denoises with a 3×3 median filter first. That slightly softens fine detail,
   but keeps hues intact — the alternative, posterizing, turned yellow olive.
+- **Gradient fills are dropped from SVG inputs.** Coat-of-arms SVGs habitually
+  paint a translucent radial "shine" over the whole shield. Heraldry is flat
+  colour and the badge ends up small, so it adds nothing you can see — but a
+  smooth gradient cannot survive quantization to a few kB, and instead breaks
+  into visible concentric arcs. Dropping it is both cheaper and truer to the
+  arms: shine-heavy inputs now compress at full 256-colour quality rather than
+  falling through to the harshest step. Only elements *filled* with a gradient
+  go; gradient strokes are left alone.
 
 ### map
 

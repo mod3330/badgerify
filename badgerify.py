@@ -18,10 +18,12 @@ import argparse
 import io
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,6 +63,28 @@ def log(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
+def strip_gradient_fills(svg: str) -> str:
+    """Drop elements painted with a gradient. Coat-of-arms SVGs habitually lay
+    a translucent radial "shine" over the whole shield; heraldry is flat colour
+    and the badge is small, so it adds nothing visually. It costs a lot though:
+    a smooth gradient can't survive quantization to a few kB, and breaks up
+    into visible concentric arcs. Removing it is both cheaper and truer."""
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
+    root = ET.fromstring(svg)
+    dropped = 0
+    for parent in root.iter():
+        for el in list(parent):
+            # Either spelling: fill="url(#g)" or style="fill:url(#g);..."
+            paint = el.get("fill", "") + " " + el.get("style", "")
+            if re.search(r"fill\s*:\s*url\(#|^url\(#", paint.strip()):
+                parent.remove(el)
+                dropped += 1
+    if not dropped:
+        return svg
+    log(f"stripped {dropped} gradient-filled element(s)")
+    return ET.tostring(root, encoding="unicode")
+
+
 def load_as_rgba(path: Path, render_size: int = SVG_RENDER_SIZE) -> Image.Image:
     """Load as RGBA; SVGs are rasterized at `render_size` wide, height
     derived from the natural aspect. Passing both width AND height to
@@ -68,7 +92,8 @@ def load_as_rgba(path: Path, render_size: int = SVG_RENDER_SIZE) -> Image.Image:
     that breaks alpha-based autocrop."""
     suffix = path.suffix.lower()
     if suffix == ".svg":
-        png_bytes = cairosvg.svg2png(url=str(path), output_width=render_size)
+        svg = strip_gradient_fills(path.read_text(encoding="utf-8"))
+        png_bytes = cairosvg.svg2png(bytestring=svg.encode(), output_width=render_size)
         img = Image.open(io.BytesIO(png_bytes))
     else:
         img = Image.open(path)
@@ -290,6 +315,11 @@ class CompressStep:
 # a 3x3 median filter, which collapses scan noise and anti-aliased edge halos
 # so pngquant doesn't burn palette slots and bytes on near-duplicates. Dither
 # is disabled there too — it would just re-introduce the noise we removed.
+#
+# Smooth gradients are the one thing this step handles badly: it contours them
+# into visible arcs, and neither dithering nor a bigger palette fixes that
+# (more levels just means more, finer contours). They're dealt with upstream
+# instead — see strip_gradient_fills().
 SCHEDULE: list[CompressStep] = [
     CompressStep("65-90", 256, False),
     CompressStep("50-80", 128, False),
