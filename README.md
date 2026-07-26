@@ -31,17 +31,17 @@ Then, from the project directory, create a virtual environment and install
 the Python dependencies into it:
 
 ```sh
-# 1. Create an isolated environment in ./.venv
-python3 -m venv .venv
+# 1. Create an isolated environment in ./venv
+python3 -m venv venv
 
 # 2. Install the Python dependencies into that environment
-.venv/bin/pip install -r requirements.txt
+venv/bin/pip install -r requirements.txt
 ```
 
 You do not need to "activate" the venv — the examples below call
-`.venv/bin/python` directly, which uses the environment automatically.
+`venv/bin/python` directly, which uses the environment automatically.
 If you prefer to activate it (so plain `python` works), run
-`source .venv/bin/activate`; type `deactivate` to leave it.
+`source venv/bin/activate`; type `deactivate` to leave it.
 
 ## Input formats
 
@@ -64,14 +64,14 @@ If you prefer to activate it (so plain `python` works), run
 Normalize a single coat of arms:
 
 ```sh
-.venv/bin/python badgerify.py crest INPUT OUTPUT \
+venv/bin/python badgerify.py crest INPUT OUTPUT \
     [--target-bytes 30000] [--max-bytes 100000] [--keep-intermediate]
 ```
 
 Example:
 
 ```sh
-.venv/bin/python badgerify.py crest input/warszawa-coa.svg out/warszawa.png
+venv/bin/python badgerify.py crest input/warszawa-coa.svg out/warszawa.png
 ```
 
 Writes a compressed `warszawa.png` (≈30 kB). Pass `--keep-intermediate` to
@@ -97,7 +97,7 @@ side-by-side inspection.
 Compose a regional map with a smaller coat of arms overlaid:
 
 ```sh
-.venv/bin/python badgerify.py map IMAGE COA OUTPUT \
+venv/bin/python badgerify.py map IMAGE COA OUTPUT \
     [--angle 30] [--coa-size 0.2] [--fit cover] [--padding 0] \
     [--target-bytes 30000] [--max-bytes 100000] [--keep-intermediate]
 ```
@@ -106,7 +106,7 @@ Example: a map of the Śródmieście district highlighted within Warsaw,
 plus Warsaw's coat of arms tucked into the corner:
 
 ```sh
-.venv/bin/python badgerify.py map \
+venv/bin/python badgerify.py map \
     input/srodmiescie-in-warsaw.svg \
     input/warsaw-coa.svg \
     out/srodmiescie.png
