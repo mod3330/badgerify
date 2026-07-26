@@ -8,7 +8,7 @@ Built for preparing badge artwork for the game
 
 Two methods are supported:
 
-- **`crest`** — a single coat of arms, centered by weighted centroid.
+- **`crest`** — a single coat of arms, centered on the canvas.
 - **`map`**   — a regional map covering the viewport, with a smaller region
   coat of arms tucked into a corner of the visible circle.
 
@@ -82,9 +82,10 @@ side-by-side inspection.
 
 - Auto-crops to the foreground, then scales the art so its diagonal fits
   inside the 800-pixel inscribed circle with 10% padding.
-- Centers by **weighted centroid**, not bounding-box center. Typical coats
-  of arms are top-heavy, so this shifts the art downward — useful because
-  the downstream consumer overlays a circle that hides the corners.
+- Centers by **bounding box**. Mass-weighted centering was tried first, but
+  foreground detection treats white as background, so a shield with a white
+  charge or quarter counted as lighter on that side and drifted off-centre —
+  placement followed the tinctures instead of the shape.
 - Compresses with pngquant + oxipng aiming for a few kB; fails if the
   result exceeds `--max-bytes`. Successively smaller palettes are tried until
   one fits under `--target-bytes`. Noisy inputs (scans, JPEG-sourced art) are

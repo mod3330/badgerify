@@ -44,7 +44,6 @@ DIAGONAL_FILL = 0.90
 SVG_RENDER_SIZE = 2400
 # Per-channel value below which an RGB pixel counts as "not white".
 WHITE_TOLERANCE = 250
-EDGE_CLAMP = 20
 # floodfill's `thresh` is the SUM of per-channel deltas from the seed. 100
 # covers white-through-frame-gray without bleeding into colored badge content.
 BG_FLOOD_THRESH = 100
@@ -216,20 +215,6 @@ def fit_map_to_canvas(img: Image.Image, mask: Image.Image,
     )
 
 
-def weighted_centroid(mask: Image.Image) -> tuple[float, float]:
-    """Mean (x, y) of foreground pixels, computed via row/column projections."""
-    w, h = mask.size
-    col_proj = mask.resize((w, 1), Image.BOX).tobytes()
-    row_proj = mask.resize((1, h), Image.BOX).tobytes()
-    col_total = sum(col_proj)
-    row_total = sum(row_proj)
-    if col_total == 0 or row_total == 0:
-        return w / 2, h / 2
-    cx = sum(x * v for x, v in enumerate(col_proj)) / col_total
-    cy = sum(y * v for y, v in enumerate(row_proj)) / row_total
-    return cx, cy
-
-
 def _paste_with_mask(canvas: Image.Image, art: Image.Image, mask: Image.Image,
                      pos: tuple[int, int]) -> None:
     if art.mode == "RGBA" and art.getchannel("A").getextrema()[0] < 255:
@@ -241,18 +226,17 @@ def _paste_with_mask(canvas: Image.Image, art: Image.Image, mask: Image.Image,
 
 
 def place_on_canvas(art: Image.Image, mask: Image.Image) -> Image.Image:
-    """Composite on white with the foreground *centroid* (not bbox center)
-    at the canvas center. Visually centers asymmetric crests better than
-    bbox-centering; EDGE_CLAMP prevents extreme offsets from hugging the rim."""
-    cx, cy = weighted_centroid(mask)
+    """Composite on white with the crest's bbox centered. Mass-weighted
+    centering was tried and dropped: the mask excludes white tinctures, so the
+    centroid moved with a crest's colours rather than its shape. Bbox centering
+    also keeps the corners inside the rim, since fit_to_circle sizes by the
+    diagonal."""
     w, h = art.size
-    paste_x = round(CANVAS / 2 - cx)
-    paste_y = round(CANVAS / 2 - cy)
-    paste_x = max(EDGE_CLAMP, min(CANVAS - w - EDGE_CLAMP, paste_x))
-    paste_y = max(EDGE_CLAMP, min(CANVAS - h - EDGE_CLAMP, paste_y))
+    paste_x = (CANVAS - w) // 2
+    paste_y = (CANVAS - h) // 2
     canvas = Image.new("RGB", (CANVAS, CANVAS), "white")
     _paste_with_mask(canvas, art, mask, (paste_x, paste_y))
-    log(f"centroid=({cx:.1f},{cy:.1f}) bbox={w}x{h} paste=({paste_x},{paste_y})")
+    log(f"bbox={w}x{h} paste=({paste_x},{paste_y})")
     return canvas
 
 
