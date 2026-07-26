@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import cairosvg
-from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageFilter
 
 # --- Shared (both methods) -------------------------------------------------
 CANVAS = 800
@@ -280,56 +280,34 @@ def _run(cmd: list[str]) -> None:
 
 @dataclass
 class CompressStep:
-    quality: str       # pngquant --quality min-max
-    colors: int        # pngquant color count
-    posterize: int | None  # bits per channel, or None
+    quality: str    # pngquant --quality min-max
+    colors: int     # pngquant color count
+    denoise: bool   # 3x3 median pre-pass + no dithering
 
 
+# No posterize: it's hue-blind and snaps whole colors into wrong buckets
+# (yellow -> olive, beige -> gray). The last-resort step instead denoises with
+# a 3x3 median filter, which collapses scan noise and anti-aliased edge halos
+# so pngquant doesn't burn palette slots and bytes on near-duplicates. Dither
+# is disabled there too — it would just re-introduce the noise we removed.
 SCHEDULE: list[CompressStep] = [
-    CompressStep("65-90", 256, None),
-    CompressStep("50-80", 128, None),
-    CompressStep("40-70",  64, None),
-    CompressStep("30-60",  32, None),
-    CompressStep("20-50",  16, 2),
+    CompressStep("65-90", 256, False),
+    CompressStep("50-80", 128, False),
+    CompressStep("40-70",  64, False),
+    CompressStep("30-60",  32, False),
+    CompressStep("0-50",   16, True),
 ]
 
-# No posterize: it's hue-blind and snaps subtle tints (beige -> gray) into
-# wrong buckets. The map pipeline uses a 3x3 median filter pre-pass instead
-# to collapse edge halos, leaving pngquant a small natural palette. One
-# extra-aggressive pngquant step is tacked on for hard-to-compress inputs.
-MAP_SCHEDULE: list[CompressStep] = [
-    s for s in SCHEDULE if s.posterize is None
-] + [CompressStep("0-50", 16, None)]
 
-
-def compress(img: Image.Image, workdir: Path, target: int, hard_cap: int,
-             schedule: list[CompressStep] = SCHEDULE) -> tuple[Path, int]:
+def compress(img: Image.Image, workdir: Path, target: int,
+             hard_cap: int) -> tuple[Path, int]:
     """Run the schedule, return (best_path, size). Stops at the first step
-    that hits `target`; raises if even the smallest result exceeds `hard_cap`.
-
-    The white-mask/white-img are for posterize steps only: posterize bit-shifts
-    every channel, so 255 collapses to e.g. 192 — we mask the original white
-    pixels back on top so the background stays #FFFFFF (one cheap palette entry)."""
+    that hits `target`; raises if even the smallest result exceeds `hard_cap`."""
     best_path: Path | None = None
     best_size: int | None = None
 
-    from PIL import ImageChops
-    rgb_src = img.convert("RGB")
-    r, g, b = rgb_src.split()
-    white_mask = ImageChops.multiply(
-        ImageChops.multiply(
-            r.point(lambda v: 255 if v == 255 else 0),
-            g.point(lambda v: 255 if v == 255 else 0),
-        ),
-        b.point(lambda v: 255 if v == 255 else 0),
-    )
-    white_img = Image.new("RGB", rgb_src.size, "white")
-
-    for i, step in enumerate(schedule):
-        work = img
-        if step.posterize is not None:
-            work = ImageOps.posterize(rgb_src, step.posterize)
-            work = Image.composite(white_img, work, white_mask)
+    for i, step in enumerate(SCHEDULE):
+        work = img.filter(ImageFilter.MedianFilter(3)) if step.denoise else img
         src = workdir / f"step{i}_src.png"
         work.save(src, format="PNG", optimize=False)
 
@@ -339,6 +317,7 @@ def compress(img: Image.Image, workdir: Path, target: int, hard_cap: int,
         rc = subprocess.run([
             "pngquant",
             "--force",
+            *(["--nofs"] if step.denoise else []),
             "--quality", step.quality,
             "--speed", "1",
             "--strip",
@@ -356,7 +335,7 @@ def compress(img: Image.Image, workdir: Path, target: int, hard_cap: int,
 
         size = quant.stat().st_size
         log(f"step {chr(ord('A') + i)}: q={step.quality} c={step.colors} "
-            f"posterize={step.posterize} -> {size} B")
+            f"denoise={step.denoise} -> {size} B")
 
         if best_size is None or size < best_size:
             best_size = size
@@ -374,11 +353,10 @@ def compress(img: Image.Image, workdir: Path, target: int, hard_cap: int,
 
 
 def save_compressed(canvas: Image.Image, output_path: Path, target: int,
-                    hard_cap: int, keep_intermediate: bool,
-                    schedule: list[CompressStep] = SCHEDULE) -> None:
+                    hard_cap: int, keep_intermediate: bool) -> None:
     with tempfile.TemporaryDirectory(prefix="badgerify-") as tmp:
         workdir = Path(tmp)
-        best, size = compress(canvas, workdir, target, hard_cap, schedule)
+        best, size = compress(canvas, workdir, target, hard_cap)
         shutil.copyfile(best, output_path)
         if keep_intermediate:
             intermediate = output_path.with_suffix(".pre.png")
@@ -430,8 +408,7 @@ def process_map(map_path: Path, coa_path: Path, output_path: Path, angle: float,
     log(f"coa cropped: {coa.size}")
     overlay_region_coa(canvas, coa, coa_mask, angle, coa_size)
 
-    save_compressed(canvas, output_path, target, hard_cap, keep_intermediate,
-                    schedule=MAP_SCHEDULE)
+    save_compressed(canvas, output_path, target, hard_cap, keep_intermediate)
 
 
 def _add_common_args(p: argparse.ArgumentParser) -> None:

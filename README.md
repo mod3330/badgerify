@@ -86,7 +86,11 @@ side-by-side inspection.
   of arms are top-heavy, so this shifts the art downward — useful because
   the downstream consumer overlays a circle that hides the corners.
 - Compresses with pngquant + oxipng aiming for a few kB; fails if the
-  result exceeds `--max-bytes`.
+  result exceeds `--max-bytes`. Successively smaller palettes are tried until
+  one fits under `--target-bytes`. Noisy inputs (scans, JPEG-sourced art) are
+  the hard case: the noise burns palette entries, so the last-resort step
+  denoises with a 3×3 median filter first. That slightly softens fine detail,
+  but keeps hues intact — the alternative, posterizing, turned yellow olive.
 
 ### map
 
