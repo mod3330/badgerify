@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Self-check for gradient flattening: venv/bin/python test_gradients.py"""
+"""Self-check for SVG preprocessing: venv/bin/python test_preprocess.py"""
 
 from __future__ import annotations
 
-from badgerify import flatten_gradient_fills
+from badgerify import preprocess_svg
 
 SVG = """<svg xmlns="http://www.w3.org/2000/svg"
      xmlns:xlink="http://www.w3.org/1999/xlink">
@@ -23,11 +23,25 @@ ENTITY_SVG = """<!DOCTYPE svg [<!ENTITY ns_x "http://example.invalid/x">]>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:x="&ns_x;"><path/></svg>"""
 
 
+# Illustrator writes map lettering twice: as <text>, and as the glyph outlines
+# a renderer actually draws. --no-labels has to take both.
+LABEL_SVG = """<svg xmlns="http://www.w3.org/2000/svg">
+  <g id="Gemeinden"><path id="keep"/></g>
+  <g id="Caption_TrueType"><text>Rheinau</text></g>
+  <g id="Caption_Outlines"><path id="glyph"/></g>
+</svg>"""
+
+
 def main() -> None:
-    out = flatten_gradient_fills(ENTITY_SVG)
+    assert 'id="glyph"' in preprocess_svg(LABEL_SVG)
+    out = preprocess_svg(LABEL_SVG, drop_text=True)
+    assert "Rheinau" not in out and 'id="glyph"' not in out, out
+    assert 'id="keep"' in out, out
+
+    out = preprocess_svg(ENTITY_SVG)
     assert "ENTITY" not in out and "&ns_x;" not in out, out
 
-    out = flatten_gradient_fills(SVG)
+    out = preprocess_svg(SVG)
     # Averaged stops: black+white -> mid gray, opacity 1+0 -> 0.5.
     assert 'fill="#808080"' in out and 'fill-opacity="0.500"' in out, out
     # Via xlink:href, with the element's own fill-opacity multiplied in.

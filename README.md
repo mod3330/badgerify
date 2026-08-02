@@ -117,7 +117,7 @@ Compose a regional map with a smaller coat of arms overlaid:
 
 ```sh
 venv/bin/python badgerify.py map IMAGE COA OUTPUT \
-    [--angle 30] [--coa-size 0.2] [--fit cover] [--padding 0] \
+    [--angle 30] [--coa-size 0.2] [--fit cover] [--padding 0] [--no-labels] \
     [--target-bytes 30000] [--max-bytes 100000] [--keep-intermediate]
 ```
 
@@ -152,6 +152,14 @@ shows all four corners after the circle crop. Padding stacks with `--fit`
 behave as usual within it. The region CoA stays tangent to the visible
 circle, so it can land in the white margin rather than over the map.
 
+`--no-labels` drops the lettering from an **SVG** map — place names, the
+names of neighbouring districts, and so on. Badge-sized text is unreadable
+anyway, and it survives compression worst of anything on the map: thin dark
+strokes on a light fill, which a 16- or 32-colour palette smears into grey
+mush and which eat palette entries the rest of the map needs. Dropping the
+labels usually buys back both quality and file size. Raster maps have no
+text to find, so the flag warns and does nothing there.
+
 The typical use case is a **district / suburb map paired with the parent
 city's coat of arms** — the map shows where in the city the suburb sits,
 and the CoA in the corner identifies which city it belongs to.
@@ -168,6 +176,13 @@ and the CoA in the corner identifies which city it belongs to.
   inscribed circle at angle `--angle`, tangent to the circle from the
   inside. Angle convention: **0° = right, 90° = up, positive
   counter-clockwise**. The default 30° lands in the upper-right.
+- `--no-labels` removes `<text>` elements *and* groups whose id looks like
+  lettering (`caption`, `label`, `beschriftung`, `schrift`). The group rule
+  is what actually does the work on the common Illustrator-exported German
+  maps: those write every label twice, once as real `<text>` and once as
+  `Caption_Outlines`, a group of glyph outlines — and it's the outlines a
+  renderer draws. Being a name heuristic, it can in principle take a layer
+  that merely has a label-ish id; the log lists every group it drops.
 - Compresses the same way as `crest`.
 
 ## License

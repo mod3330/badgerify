@@ -57,6 +57,10 @@ BG_FLOOD_THRESH = 100
 BG_SEED_MIN_CHANNEL = 150
 
 # --- Map method only -------------------------------------------------------
+# Group ids that --no-labels treats as lettering. Covers Illustrator's
+# "Caption_Outlines" / "Caption_TrueType" and Inkscape layers named after
+# labels in English or German.
+LABEL_GROUP_ID = re.compile(r"caption|label|beschriftung|schrift", re.I)
 REGION_COA_SIZE_FRAC = 0.2
 # Subtracted from the radius when placing the overlay CoA — higher = closer
 # to the map's center.
@@ -86,14 +90,17 @@ def _stop_paint(stop: ET.Element) -> tuple[tuple[int, int, int], float]:
     return rgb, opacity
 
 
-def flatten_gradient_fills(svg: str) -> str:
+def preprocess_svg(svg: str, drop_text: bool = False) -> str:
     """Repaint gradient-filled elements with the average of the gradient's
     stops. A smooth gradient can't survive quantization to a few kB — it breaks
     into visible concentric arcs — and heraldry is flat colour anyway, so the
     ramp is no loss. The shapes are: dropping the elements outright (what this
     used to do) also deletes crown bodies, inner shields and bosses whenever
     they happen to be gradient-painted, gutting the arms. Stop opacity is
-    averaged in too, so a translucent "shine" overlay stays translucent."""
+    averaged in too, so a translucent "shine" overlay stays translucent.
+
+    With `drop_text`, `<text>` elements go as well — map labels are thin dark
+    strokes that a small palette turns to mush."""
     ET.register_namespace("", SVG_NS)
     root = ET.fromstring(svg)
     grads = {
@@ -149,20 +156,43 @@ def flatten_gradient_fills(svg: str) -> str:
 
     if flattened:
         log(f"flattened {flattened} gradient paint(s)")
+
+    if drop_text:
+        # flowRoot is Inkscape's flowed-text element; both carry their content
+        # in children, so removing the element takes the tspans with it.
+        text_tags = (f"{{{SVG_NS}}}text", f"{{{SVG_NS}}}flowRoot")
+        dropped = 0
+        for parent in root.iter():
+            for el in list(parent):
+                if el.tag in text_tags:
+                    parent.remove(el)
+                    dropped += 1
+                elif el.tag == f"{{{SVG_NS}}}g" and LABEL_GROUP_ID.search(el.get("id", "")):
+                    # Illustrator exports the same labels twice: as <text> and
+                    # as a group of glyph outlines (which is what renderers
+                    # actually draw). Only the group id gives the second one
+                    # away, so this is a name heuristic, not a real rule.
+                    log(f"dropped label group '{el.get('id')}'")
+                    parent.remove(el)
+                    dropped += 1
+        log(f"dropped {dropped} text element(s)")
     # Return the re-serialized tree even when nothing was flattened: it also
     # drops the DOCTYPE, whose entity declarations (Illustrator exports are
     # full of them) make cairosvg's defusedxml parser refuse the file outright.
     return ET.tostring(root, encoding="unicode")
 
 
-def load_as_rgba(path: Path, render_size: int = SVG_RENDER_SIZE) -> Image.Image:
+def load_as_rgba(path: Path, render_size: int = SVG_RENDER_SIZE,
+                 drop_text: bool = False) -> Image.Image:
     """Load as RGBA; SVGs are rasterized at `render_size` wide, height
     derived from the natural aspect. Passing both width AND height to
     cairosvg would stretch non-square art and add transparent letterboxing
     that breaks alpha-based autocrop."""
     suffix = path.suffix.lower()
+    if suffix != ".svg" and drop_text:
+        log("warning: --no-labels only works on SVG input; ignoring")
     if suffix == ".svg":
-        svg = flatten_gradient_fills(path.read_text(encoding="utf-8"))
+        svg = preprocess_svg(path.read_text(encoding="utf-8"), drop_text)
         png_bytes = cairosvg.svg2png(bytestring=svg.encode(), output_width=render_size)
         img = Image.open(io.BytesIO(png_bytes))
     else:
@@ -508,9 +538,9 @@ def process_crest(input_path: Path, output_path: Path, target: int, hard_cap: in
 
 def process_map(map_path: Path, coa_path: Path, output_path: Path, angle: float,
                 coa_size: float, fit: str, padding: float, target: int,
-                hard_cap: int, keep_intermediate: bool) -> None:
+                hard_cap: int, keep_intermediate: bool, no_labels: bool) -> None:
     log(f"map: {map_path}")
-    map_img = load_as_rgba(map_path, render_size=CANVAS)
+    map_img = load_as_rgba(map_path, render_size=CANVAS, drop_text=no_labels)
     log(f"map loaded: {map_img.size}")
     map_mask = map_foreground_mask(map_img)
     map_img, map_mask = autocrop(map_img, map_mask)
@@ -576,6 +606,10 @@ def main() -> int:
                             "circular crop doesn't eat the corners (e.g. 0.15 "
                             "is about the largest square that still fits in "
                             "the inscribed circle). Default: 0.0")
+    map_p.add_argument("--no-labels", action="store_true",
+                       help="drop text elements from an SVG map (place names, "
+                            "neighbour labels). They are thin dark strokes that "
+                            "compression turns to mush")
     _add_common_args(map_p)
 
     args = ap.parse_args()
@@ -593,7 +627,7 @@ def main() -> int:
             process_map(args.image, args.coa, args.output, args.angle,
                         args.coa_size, args.fit, args.padding,
                         args.target_bytes, args.max_bytes,
-                        args.keep_intermediate)
+                        args.keep_intermediate, args.no_labels)
     except RuntimeError as e:
         log(f"error: {e}")
         return 1
