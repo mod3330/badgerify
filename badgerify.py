@@ -28,9 +28,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import cairosvg
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageColor, ImageDraw, ImageFilter
 
 # --- Shared (both methods) -------------------------------------------------
+SVG_NS = "http://www.w3.org/2000/svg"
+XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
 CANVAS = 800
 CIRCLE_DIAMETER = 800  # circle is inscribed in the square
 ALPHA_THRESHOLD = 16
@@ -65,25 +67,89 @@ def log(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def strip_gradient_fills(svg: str) -> str:
-    """Drop elements painted with a gradient. Coat-of-arms SVGs habitually lay
-    a translucent radial "shine" over the whole shield; heraldry is flat colour
-    and the badge is small, so it adds nothing visually. It costs a lot though:
-    a smooth gradient can't survive quantization to a few kB, and breaks up
-    into visible concentric arcs. Removing it is both cheaper and truer."""
-    ET.register_namespace("", "http://www.w3.org/2000/svg")
+def _stop_paint(stop: ET.Element) -> tuple[tuple[int, int, int], float]:
+    """(rgb, opacity) of one gradient stop, from `style` or plain attributes."""
+    style = stop.get("style", "")
+
+    def prop(name: str, default: str) -> str:
+        m = re.search(rf"\b{name}\s*:\s*([^;]+)", style)
+        return (m.group(1) if m else stop.get(name, default)).strip()
+
+    try:
+        rgb = ImageColor.getrgb(prop("stop-color", "#000000"))[:3]
+    except ValueError:
+        rgb = (0, 0, 0)
+    try:
+        opacity = float(prop("stop-opacity", "1"))
+    except ValueError:
+        opacity = 1.0
+    return rgb, opacity
+
+
+def flatten_gradient_fills(svg: str) -> str:
+    """Repaint gradient-filled elements with the average of the gradient's
+    stops. A smooth gradient can't survive quantization to a few kB — it breaks
+    into visible concentric arcs — and heraldry is flat colour anyway, so the
+    ramp is no loss. The shapes are: dropping the elements outright (what this
+    used to do) also deletes crown bodies, inner shields and bosses whenever
+    they happen to be gradient-painted, gutting the arms. Stop opacity is
+    averaged in too, so a translucent "shine" overlay stays translucent."""
+    ET.register_namespace("", SVG_NS)
     root = ET.fromstring(svg)
-    dropped = 0
-    for parent in root.iter():
-        for el in list(parent):
-            # Either spelling: fill="url(#g)" or style="fill:url(#g);..."
-            paint = el.get("fill", "") + " " + el.get("style", "")
-            if re.search(r"fill\s*:\s*url\(#|^url\(#", paint.strip()):
-                parent.remove(el)
-                dropped += 1
-    if not dropped:
+    grads = {
+        g.get("id"): g
+        for g in root.iter()
+        if g.tag in (f"{{{SVG_NS}}}linearGradient", f"{{{SVG_NS}}}radialGradient")
+    }
+
+    def flat(ref: str, depth: int = 0) -> tuple[str, float] | None:
+        """Average paint of gradient `#id`. Inkscape splits a gradient into a
+        stop-carrying one plus an href'ing one that only sets coordinates."""
+        g = grads.get(ref.lstrip("#"))
+        if g is None or depth > 4:
+            return None
+        stops = g.findall(f"{{{SVG_NS}}}stop")
+        if not stops:
+            return flat(g.get(XLINK_HREF) or g.get("href") or "", depth + 1)
+        paints = [_stop_paint(s) for s in stops]
+        rgb = tuple(round(sum(p[0][i] for p in paints) / len(paints)) for i in range(3))
+        return "#%02x%02x%02x" % rgb, sum(p[1] for p in paints) / len(paints)
+
+    def repaint(get, set_, prop: str) -> bool:
+        m = re.match(r"url\((#[^)]+)\)$", get(prop, "").strip())
+        if not m:
+            return False
+        f = flat(m.group(1))
+        if f is None:
+            return False
+        color, opacity = f
+        try:
+            opacity *= float(get(f"{prop}-opacity", "1"))
+        except ValueError:
+            pass
+        set_(prop, color)
+        set_(f"{prop}-opacity", f"{opacity:.3f}")
+        return True
+
+    flattened = 0
+    for el in root.iter():
+        # Either spelling: fill="url(#g)" or style="fill:url(#g);...".
+        for prop in ("fill", "stroke"):
+            flattened += repaint(el.get, el.set, prop)
+        style = el.get("style", "")
+        if "url(#" not in style:
+            continue
+        props = dict(
+            (k.strip(), v.strip()) for k, v in
+            (decl.split(":", 1) for decl in style.split(";") if ":" in decl)
+        )
+        for prop in ("fill", "stroke"):
+            flattened += repaint(props.get, props.__setitem__, prop)
+        el.set("style", ";".join(f"{k}:{v}" for k, v in props.items()))
+
+    if not flattened:
         return svg
-    log(f"stripped {dropped} gradient-filled element(s)")
+    log(f"flattened {flattened} gradient paint(s)")
     return ET.tostring(root, encoding="unicode")
 
 
@@ -94,7 +160,7 @@ def load_as_rgba(path: Path, render_size: int = SVG_RENDER_SIZE) -> Image.Image:
     that breaks alpha-based autocrop."""
     suffix = path.suffix.lower()
     if suffix == ".svg":
-        svg = strip_gradient_fills(path.read_text(encoding="utf-8"))
+        svg = flatten_gradient_fills(path.read_text(encoding="utf-8"))
         png_bytes = cairosvg.svg2png(bytestring=svg.encode(), output_width=render_size)
         img = Image.open(io.BytesIO(png_bytes))
     else:

@@ -102,14 +102,14 @@ side-by-side inspection.
   softens fine detail but keeps hues intact — the alternative, posterizing,
   turned yellow olive. It used to run on any input that missed the target,
   which is why clean, detailed art came out mushy.
-- **Gradient fills are dropped from SVG inputs.** Coat-of-arms SVGs habitually
-  paint a translucent radial "shine" over the whole shield. Heraldry is flat
-  colour and the badge ends up small, so it adds nothing you can see — but a
-  smooth gradient cannot survive quantization to a few kB, and instead breaks
-  into visible concentric arcs. Dropping it is both cheaper and truer to the
-  arms: shine-heavy inputs now compress at full 256-colour quality rather than
-  falling through to the harshest step. Only elements *filled* with a gradient
-  go; gradient strokes are left alone.
+- **Gradients in SVG inputs are flattened to a solid colour** — the average of
+  the gradient's stops, opacity included, so a translucent "shine" overlay
+  stays translucent. A smooth gradient cannot survive quantization to a few kB;
+  it breaks into visible concentric arcs and eats palette entries. Heraldry is
+  flat colour and the badge ends up small, so the ramp is no loss. Earlier
+  versions deleted gradient-painted elements outright, which also deleted crown
+  bodies, inner shields and bosses whenever those happened to be gradient-
+  painted — losing half the arms.
 
 ### map
 
