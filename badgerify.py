@@ -3,8 +3,8 @@
 
 Methods:
   crest  Single coat of arms. Rasterize (if SVG) -> identify foreground ->
-         auto-crop -> scale to fit the inscribed circle -> place by weighted
-         centroid -> composite on white.
+         auto-crop -> scale to fit the inscribed circle -> center its
+         enclosing circle -> composite on white.
   map    Regional map with a smaller region coat of arms in a corner.
          Scale the map so its diagonal fits the inscribed circle, then
          overlay the region CoA inside the visible circle at a given angle.
@@ -39,6 +39,9 @@ ALPHA_THRESHOLD = 16
 # Fraction of the circle's diameter the crest's bbox diagonal fills.
 # <1 leaves a ring of padding inside the rim.
 DIAGONAL_FILL = 0.90
+# Badoiu-Clarkson iterations for the enclosing-circle center. Error in the
+# radius falls as 1/steps; 200 is sub-pixel at this canvas size.
+ENCLOSING_CIRCLE_STEPS = 200
 # SVG rasterize width. Oversampled so the autocrop bbox has resolution after
 # downscaling; map mode overrides this to CANVAS to skip the LANCZOS step.
 SVG_RENDER_SIZE = 2400
@@ -225,15 +228,35 @@ def _paste_with_mask(canvas: Image.Image, art: Image.Image, mask: Image.Image,
         canvas.paste(art, pos, mask)
 
 
+def _enclosing_circle_center(mask: Image.Image) -> tuple[float, float]:
+    """Center of the smallest circle enclosing the foreground (Badoiu-Clarkson:
+    repeatedly step toward the farthest point). Only the leftmost and rightmost
+    pixel of each row can be a hull vertex, so that is all we scan."""
+    w, h = mask.size
+    pts: list[tuple[int, int]] = []
+    for y in range(h):
+        row = mask.crop((0, y, w, y + 1)).getbbox()
+        if row:
+            pts += [(row[0], y), (row[2] - 1, y)]
+    cx, cy = w / 2, h / 2
+    for i in range(1, ENCLOSING_CIRCLE_STEPS + 1):
+        fx, fy = max(pts, key=lambda p: (p[0] - cx) ** 2 + (p[1] - cy) ** 2)
+        cx += (fx - cx) / (i + 1)
+        cy += (fy - cy) / (i + 1)
+    return cx, cy
+
+
 def place_on_canvas(art: Image.Image, mask: Image.Image) -> Image.Image:
-    """Composite on white with the crest's bbox centered. Mass-weighted
-    centering was tried and dropped: the mask excludes white tinctures, so the
-    centroid moved with a crest's colours rather than its shape. Bbox centering
-    also keeps the corners inside the rim, since fit_to_circle sizes by the
-    diagonal."""
+    """Composite on white with the crest's smallest enclosing circle centered
+    on the canvas. Bbox centering was tried and dropped: a shield's rounded
+    base leaves the lower bbox corners empty, so centering the box pushed the
+    flat top edge nearer the rim than the base. Mass-weighted centering was
+    dropped before that — the mask excludes white tinctures, so the centroid
+    moved with a crest's colours rather than its shape."""
     w, h = art.size
-    paste_x = (CANVAS - w) // 2
-    paste_y = (CANVAS - h) // 2
+    cx, cy = _enclosing_circle_center(mask)
+    paste_x = round(CANVAS / 2 - cx)
+    paste_y = round(CANVAS / 2 - cy)
     canvas = Image.new("RGB", (CANVAS, CANVAS), "white")
     _paste_with_mask(canvas, art, mask, (paste_x, paste_y))
     log(f"bbox={w}x{h} paste=({paste_x},{paste_y})")

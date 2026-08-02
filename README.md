@@ -82,10 +82,13 @@ side-by-side inspection.
 
 - Auto-crops to the foreground, then scales the art so its diagonal fits
   inside the 800-pixel inscribed circle with 10% padding.
-- Centers by **bounding box**. Mass-weighted centering was tried first, but
-  foreground detection treats white as background, so a shield with a white
-  charge or quarter counted as lighter on that side and drifted off-centre —
-  placement followed the tinctures instead of the shape.
+- Centers on the art's **smallest enclosing circle**, so the padding ring is
+  even all the way round. Bounding-box centering was tried first: a shield's
+  rounded base leaves the lower box corners empty, which pushed the flat top
+  edge closer to the rim than the base. Mass-weighted centering was tried
+  before that, but foreground detection treats white as background, so a
+  shield with a white charge or quarter counted as lighter on that side and
+  drifted off-centre — placement followed the tinctures instead of the shape.
 - Compresses with pngquant + oxipng, trying successively smaller palettes
   (256 down to 16 colours) until one fits under `--target-bytes`.
 - **`--target-bytes` is an aim, `--max-bytes` is the limit.** Detailed arms
