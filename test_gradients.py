@@ -17,7 +17,16 @@ SVG = """<svg xmlns="http://www.w3.org/2000/svg"
 </svg>"""
 
 
+# Illustrator-style export: cairosvg's parser rejects entity declarations, so
+# the DOCTYPE has to be gone (and its entities expanded) on the way out.
+ENTITY_SVG = """<!DOCTYPE svg [<!ENTITY ns_x "http://example.invalid/x">]>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:x="&ns_x;"><path/></svg>"""
+
+
 def main() -> None:
+    out = flatten_gradient_fills(ENTITY_SVG)
+    assert "ENTITY" not in out and "&ns_x;" not in out, out
+
     out = flatten_gradient_fills(SVG)
     # Averaged stops: black+white -> mid gray, opacity 1+0 -> 0.5.
     assert 'fill="#808080"' in out and 'fill-opacity="0.500"' in out, out

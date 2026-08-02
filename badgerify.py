@@ -147,9 +147,11 @@ def flatten_gradient_fills(svg: str) -> str:
             flattened += repaint(props.get, props.__setitem__, prop)
         el.set("style", ";".join(f"{k}:{v}" for k, v in props.items()))
 
-    if not flattened:
-        return svg
-    log(f"flattened {flattened} gradient paint(s)")
+    if flattened:
+        log(f"flattened {flattened} gradient paint(s)")
+    # Return the re-serialized tree even when nothing was flattened: it also
+    # drops the DOCTYPE, whose entity declarations (Illustrator exports are
+    # full of them) make cairosvg's defusedxml parser refuse the file outright.
     return ET.tostring(root, encoding="unicode")
 
 
